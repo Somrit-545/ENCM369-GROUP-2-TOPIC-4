@@ -19,7 +19,7 @@ Course concepts demonstrated:
 
 Author: Member A (combinational / gate-level design)
 """
-rom typing import List, Sequence, Tuple
+from typing import List, Sequence, Tuple
 
 from .gates import AND, NOT, OR, XOR
 
