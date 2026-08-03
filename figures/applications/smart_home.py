@@ -54,6 +54,7 @@ SECURITY_EVENTS: Tuple[str, ...] = (
     "arm",
     "disarm",
     "motion",
+    "smoke",
     "clear",
 )
 
@@ -61,14 +62,17 @@ SECURITY_TRANSITIONS = {
     ("DISARMED", "arm"): "ARMED",
     ("DISARMED", "disarm"): "DISARMED",
     ("DISARMED", "motion"): "DISARMED",
+    ("DISARMED", "smoke"): "ALARM",
     ("DISARMED", "clear"): "DISARMED",
     ("ARMED", "arm"): "ARMED",
     ("ARMED", "disarm"): "DISARMED",
     ("ARMED", "motion"): "ALARM",
+    ("ARMED", "smoke"): "ALARM",
     ("ARMED", "clear"): "ARMED",
     ("ALARM", "arm"): "ALARM",
     ("ALARM", "disarm"): "DISARMED",
     ("ALARM", "motion"): "ALARM",
+    ("ALARM", "smoke"): "ALARM",
     ("ALARM", "clear"): "ARMED",
 }
 
@@ -85,6 +89,7 @@ THERMOSTAT_ACTIONS = {
 }
 
 SecurityTraceEntry = Tuple[str, str, str]
+SmokeAlarmResult = Tuple[int, str, str]
 CommandDecodeResult = Tuple[str, List[int]]
 
 
@@ -195,6 +200,32 @@ def read_status(sensors: Sequence[int], channel_sel: int) -> int:
     return mux4(*checked, s1, s0)
 
 
+def apply_smoke_sensor(
+    security: FSM,
+    sensors: Sequence[int],
+) -> SmokeAlarmResult:
+    """Read the smoke channel and trigger the security alarm when smoke is 1.
+
+    The smoke detector is connected to channel 3 of the 4-to-1 multiplexer.
+    A detected smoke signal triggers the ``smoke`` event from any security
+    state, so the Moore FSM enters or remains in ``ALARM`` with ``siren=ON``.
+    When smoke is 0, the current security state is preserved.
+    """
+    if not isinstance(security, FSM):
+        raise TypeError("security must be an FSM instance")
+
+    smoke_channel = SENSOR_NAMES.index("smoke")
+    smoke_detected = read_status(sensors, smoke_channel)
+    if smoke_detected == 1:
+        security.step("smoke")
+
+    state = security.state
+    output = security.output()
+    if state not in SECURITY_STATES or not isinstance(output, str):
+        raise RuntimeError("smoke-alarm integration produced an invalid result")
+    return smoke_detected, state, output
+
+
 def thermostat(current_temp: int, setpoint: int, width: int = 6) -> str:
     """Return HEAT, COOL, or IDLE using an unsigned fixed-width comparator."""
     width = _require_integer(width, "width")
@@ -236,6 +267,20 @@ def demo() -> str:
     for channel, name in enumerate(SENSOR_NAMES):
         value = read_status(sensors, channel)
         log.append(f"  channel {channel} ({name:<7}) -> {value}")
+
+    log.append("\n[Fire detection -- smoke sensor + security FSM]")
+    safe_security = build_security_fsm()
+    safe_result = apply_smoke_sensor(safe_security, (0, 0, 0, 0))
+    log.append(
+        f"  smoke={safe_result[0]} -> {safe_result[1]:<9} "
+        f"[{safe_result[2]}]"
+    )
+    fire_security = build_security_fsm()
+    fire_result = apply_smoke_sensor(fire_security, (0, 0, 0, 1))
+    log.append(
+        f"  smoke={fire_result[0]} -> {fire_result[1]:<9} "
+        f"[{fire_result[2]}]"
+    )
 
     log.append("\n[Thermostat -- 6-bit magnitude comparator]")
     setpoint = 21
