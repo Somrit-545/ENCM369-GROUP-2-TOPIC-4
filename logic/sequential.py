@@ -21,9 +21,10 @@ Author: Member B (sequential logic / clocking)
 """
 
 
+
 from typing import List
 
-from gates import XOR
+from .gates import XOR
 
 
 def _require_integer(value: int, name: str) -> int:
