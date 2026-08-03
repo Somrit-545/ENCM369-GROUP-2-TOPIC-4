@@ -21,134 +21,206 @@ Author: Member B (sequential logic / clocking)
 """
 
 
-from dataclasses import dataclass
-from typing import Callable, List, Tuple
+from typing import List
+
+from .gates import XOR
 
 
-@dataclass
-class GateCounter:
-    """Count successful primitive-gate evaluations."""
-
-    count: int = 0
-
-    def tick(self, amount: int = 1) -> None:
-        """Increase the counter by a positive integer amount."""
-        if isinstance(amount, bool) or not isinstance(amount, int):
-            raise TypeError("amount must be an integer")
-        if amount < 1:
-            raise ValueError("amount must be at least 1")
-        self.count += amount
-
-    def reset(self) -> None:
-        """Reset the evaluation count to zero."""
-        self.count = 0
-
-
-GATE_OPS = GateCounter()
-
-
-def _bit(value: int, name: str = "logic signal") -> int:
-    """Validate and return one non-Boolean binary digit."""
+def _require_integer(value: int, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise TypeError(f"{name} must be the integer 0 or 1")
-    if value not in (0, 1):
-        raise ValueError(f"{name} must be 0 or 1, got {value!r}")
+        raise TypeError(f"{name} must be an integer")
     return value
 
 
-def NOT(a: int) -> int:
-    """Return the logical complement of one bit."""
-    a = _bit(a, "a")
-    GATE_OPS.tick()
-    return 1 - a
+def _require_bit(value: int, name: str) -> int:
+    value = _require_integer(value, name)
+    if value not in (0, 1):
+        raise ValueError(f"{name} must be 0 or 1")
+    return value
 
 
-def AND(a: int, b: int) -> int:
-    """Return 1 only when both input bits are 1."""
-    a = _bit(a, "a")
-    b = _bit(b, "b")
-    GATE_OPS.tick()
-    return a & b
+def _require_width(width: int) -> int:
+    width = _require_integer(width, "width")
+    if width < 1:
+        raise ValueError("width must be at least 1")
+    return width
 
 
-def OR(a: int, b: int) -> int:
-    """Return 1 when at least one input bit is 1."""
-    a = _bit(a, "a")
-    b = _bit(b, "b")
-    GATE_OPS.tick()
-    return a | b
+def _require_unsigned(value: int, width: int, name: str) -> int:
+    value = _require_integer(value, name)
+    maximum = (1 << width) - 1
+    if not 0 <= value <= maximum:
+        raise ValueError(f"{name} must be in the range 0 to {maximum}")
+    return value
 
 
-def NAND(a: int, b: int) -> int:
-    """Return the complement of AND."""
-    a = _bit(a, "a")
-    b = _bit(b, "b")
-    GATE_OPS.tick()
-    return 1 - (a & b)
+class DFlipFlop:
+    """Positive-edge-triggered D flip-flop."""
+
+    def __init__(self, initial: int = 0):
+        initial = _require_bit(initial, "initial")
+        self.q = initial
+        self.d = initial
+
+    def set_input(self, d: int) -> None:
+        """Present one valid bit at the D input."""
+        self.d = _require_bit(d, "d")
+
+    def clock(self) -> int:
+        """Latch D into Q and return the new Q value."""
+        self.q = self.d
+        return self.q
+
+    def reset(self) -> None:
+        """Clear both the stored output and pending input."""
+        self.q = 0
+        self.d = 0
 
 
-def NOR(a: int, b: int) -> int:
-    """Return the complement of OR."""
-    a = _bit(a, "a")
-    b = _bit(b, "b")
-    GATE_OPS.tick()
-    return 1 - (a | b)
+class JKFlipFlop:
+    """Positive-edge-triggered JK flip-flop."""
+
+    def __init__(self, initial: int = 0):
+        self.q = _require_bit(initial, "initial")
+        self.j = 0
+        self.k = 0
+
+    def set_inputs(self, j: int, k: int) -> None:
+        """Present valid J and K control bits."""
+        self.j = _require_bit(j, "j")
+        self.k = _require_bit(k, "k")
+
+    def clock(self) -> int:
+        """Apply the JK next-state table and return the new Q value."""
+        if self.j == 0 and self.k == 1:
+            self.q = 0
+        elif self.j == 1 and self.k == 0:
+            self.q = 1
+        elif self.j == 1 and self.k == 1:
+            self.q = 1 - self.q
+        return self.q
+
+    def reset(self) -> None:
+        """Clear the stored output and control inputs."""
+        self.q = 0
+        self.j = 0
+        self.k = 0
 
 
-def XOR(a: int, b: int) -> int:
-    """Return 1 when the two input bits differ."""
-    a = _bit(a, "a")
-    b = _bit(b, "b")
-    GATE_OPS.tick()
-    return a ^ b
+class TFlipFlop:
+    """Positive-edge-triggered T flip-flop using XOR feedback."""
+
+    def __init__(self, initial: int = 0):
+        self.dff = DFlipFlop(initial)
+        self.t = 0
+
+    @property
+    def q(self) -> int:
+        """Return the stored output bit."""
+        return self.dff.q
+
+    def set_input(self, t: int) -> None:
+        """Present a valid toggle-enable bit."""
+        self.t = _require_bit(t, "t")
+
+    def clock(self) -> int:
+        """Toggle when T is 1, otherwise hold."""
+        self.dff.set_input(XOR(self.t, self.dff.q))
+        return self.dff.clock()
+
+    def reset(self) -> None:
+        """Clear the stored output and toggle input."""
+        self.dff.reset()
+        self.t = 0
 
 
-def XNOR(a: int, b: int) -> int:
-    """Return 1 when the two input bits are equal."""
-    a = _bit(a, "a")
-    b = _bit(b, "b")
-    GATE_OPS.tick()
-    return 1 - (a ^ b)
+class Register:
+    """An N-bit parallel-load register modeled with D flip-flops."""
+
+    def __init__(self, width: int, initial: int = 0):
+        self.width = _require_width(width)
+        initial = _require_unsigned(initial, self.width, "initial")
+        self.cells: List[DFlipFlop] = [
+            DFlipFlop((initial >> (self.width - 1 - index)) & 1)
+            for index in range(self.width)
+        ]
+
+    def load(self, value: int) -> None:
+        """Present a valid word at the D inputs for the next clock edge."""
+        value = _require_unsigned(value, self.width, "value")
+        for index, cell in enumerate(self.cells):
+            cell.set_input((value >> (self.width - 1 - index)) & 1)
+
+    def clock(self) -> int:
+        """Latch all D inputs in parallel and return the stored word."""
+        for cell in self.cells:
+            cell.clock()
+        return self.value()
+
+    def value(self) -> int:
+        """Return the currently stored unsigned integer."""
+        result = 0
+        for cell in self.cells:
+            result = (result << 1) | cell.q
+        return result
+
+    def reset(self) -> None:
+        """Clear every storage cell."""
+        for cell in self.cells:
+            cell.reset()
 
 
-def NOT_from_nand(a: int) -> int:
-    """Implement NOT using NAND only."""
-    return NAND(a, a)
+class BinaryCounter:
+    """Synchronous N-bit up counter built from T flip-flop models."""
+
+    def __init__(self, width: int, initial: int = 0):
+        self.width = _require_width(width)
+        initial = _require_unsigned(initial, self.width, "initial")
+        self.stages: List[TFlipFlop] = [
+            TFlipFlop((initial >> index) & 1)
+            for index in range(self.width)
+        ]
+
+    def reset(self) -> None:
+        """Clear the counter to zero."""
+        for stage in self.stages:
+            stage.reset()
+
+    def clock(self) -> int:
+        """Advance one synchronous count and return the new value."""
+        previous = [stage.q for stage in self.stages]
+        enable = 1
+        for index, stage in enumerate(self.stages):
+            stage.set_input(enable)
+            enable &= previous[index]
+        for stage in self.stages:
+            stage.clock()
+        return self.value()
+
+    def value(self) -> int:
+        """Return the current unsigned counter value."""
+        result = 0
+        for stage in reversed(self.stages):
+            result = (result << 1) | stage.q
+        return result
 
 
-def AND_from_nand(a: int, b: int) -> int:
-    """Implement AND using NAND only."""
-    return NOT_from_nand(NAND(a, b))
+class Clock:
+    """Simple simulation clock that returns an increasing edge count."""
 
+    def __init__(self):
+        self.ticks = 0
 
-def OR_from_nand(a: int, b: int) -> int:
-    """Implement OR using NAND only."""
-    return NAND(NOT_from_nand(a), NOT_from_nand(b))
+    def tick(self) -> int:
+        """Advance one edge and return the total number of elapsed edges."""
+        self.ticks += 1
+        return self.ticks
 
-
-def truth_table(
-    function: Callable[..., int],
-    arity: int,
-) -> List[Tuple[Tuple[int, ...], int]]:
-    """Return every binary input row for a function of the given arity."""
-    if not callable(function):
-        raise TypeError("function must be callable")
-    if isinstance(arity, bool) or not isinstance(arity, int):
-        raise TypeError("arity must be an integer")
-    if arity < 1:
-        raise ValueError("arity must be at least 1")
-
-    rows = []
-    for value in range(1 << arity):
-        inputs = tuple(
-            (value >> (arity - 1 - index)) & 1
-            for index in range(arity)
-        )
-        rows.append((inputs, function(*inputs)))
-    return rows
+    def reset(self) -> None:
+        """Reset the edge count to zero."""
+        self.ticks = 0
 
 
 if __name__ == "__main__":
-    print("XOR truth table:")
-    for inputs, output in truth_table(XOR, 2):
-        print(f"  {inputs} -> {output}")
+    counter = BinaryCounter(3)
+    print("3-bit counter sequence:", [counter.clock() for _ in range(10)])
