@@ -20,65 +20,95 @@ Course concepts demonstrated:
 Author: Member B (sequential logic / clocking)
 """
 
+
 from typing import List
+
 from .gates import XOR
 
 
+def _require_integer(value: int, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} must be an integer")
+    return value
+
+
+def _require_bit(value: int, name: str) -> int:
+    value = _require_integer(value, name)
+    if value not in (0, 1):
+        raise ValueError(f"{name} must be 0 or 1")
+    return value
+
+
+def _require_width(width: int) -> int:
+    width = _require_integer(width, "width")
+    if width < 1:
+        raise ValueError("width must be at least 1")
+    return width
+
+
+def _require_unsigned(value: int, width: int, name: str) -> int:
+    value = _require_integer(value, name)
+    maximum = (1 << width) - 1
+    if not 0 <= value <= maximum:
+        raise ValueError(f"{name} must be in the range 0 to {maximum}")
+    return value
+
+
 class DFlipFlop:
-    """
-    Positive-edge-triggered D flip-flop.
-    On a clock edge the output Q takes the value present on input D.
-    """
+    """Positive-edge-triggered D flip-flop."""
 
     def __init__(self, initial: int = 0):
-        self.q = initial & 1
-        self.d = initial & 1
+        initial = _require_bit(initial, "initial")
+        self.q = initial
+        self.d = initial
 
     def set_input(self, d: int) -> None:
-        self.d = d & 1
+        """Present one valid bit at the D input."""
+        self.d = _require_bit(d, "d")
 
     def clock(self) -> int:
-        """Advance one clock edge; latch D into Q. Returns new Q."""
+        """Latch D into Q and return the new Q value."""
         self.q = self.d
         return self.q
 
+    def reset(self) -> None:
+        """Clear both the stored output and pending input."""
+        self.q = 0
+        self.d = 0
+
 
 class JKFlipFlop:
-    """
-    Positive-edge-triggered JK flip-flop.
-      J K | next Q
-      0 0 | hold
-      0 1 | reset (0)
-      1 0 | set   (1)
-      1 1 | toggle
-    """
+    """Positive-edge-triggered JK flip-flop."""
 
     def __init__(self, initial: int = 0):
-        self.q = initial & 1
+        self.q = _require_bit(initial, "initial")
         self.j = 0
         self.k = 0
 
     def set_inputs(self, j: int, k: int) -> None:
-        self.j, self.k = j & 1, k & 1
+        """Present valid J and K control bits."""
+        self.j = _require_bit(j, "j")
+        self.k = _require_bit(k, "k")
 
     def clock(self) -> int:
-        if self.j == 0 and self.k == 0:
-            pass                      # hold
-        elif self.j == 0 and self.k == 1:
-            self.q = 0                # reset
+        """Apply the JK next-state table and return the new Q value."""
+        if self.j == 0 and self.k == 1:
+            self.q = 0
         elif self.j == 1 and self.k == 0:
-            self.q = 1                # set
-        else:
-            self.q = 1 - self.q       # toggle
+            self.q = 1
+        elif self.j == 1 and self.k == 1:
+            self.q = 1 - self.q
         return self.q
+
+    def reset(self) -> None:
+        """Clear the stored output and control inputs."""
+        self.q = 0
+        self.j = 0
+        self.k = 0
 
 
 class TFlipFlop:
-    """
-    Positive-edge-triggered T (toggle) flip-flop.
-    When T=1 the output toggles on a clock edge; when T=0 it holds.
-    Implemented with an XOR feeding a D flip-flop, as in real hardware.
-    """
+    """Positive-edge-triggered T flip-flop using XOR feedback."""
 
     def __init__(self, initial: int = 0):
         self.dff = DFlipFlop(initial)
@@ -86,99 +116,111 @@ class TFlipFlop:
 
     @property
     def q(self) -> int:
+        """Return the stored output bit."""
         return self.dff.q
 
     def set_input(self, t: int) -> None:
-        self.t = t & 1
+        """Present a valid toggle-enable bit."""
+        self.t = _require_bit(t, "t")
 
     def clock(self) -> int:
+        """Toggle when T is 1, otherwise hold."""
         self.dff.set_input(XOR(self.t, self.dff.q))
         return self.dff.clock()
 
+    def reset(self) -> None:
+        """Clear the stored output and toggle input."""
+        self.dff.reset()
+        self.t = 0
+
 
 class Register:
-    """
-    n-bit register: an array of D flip-flops that load in parallel.
-    Bits are stored/reported MSB-first to match the combinational helpers.
-    """
+    """An N-bit parallel-load register modeled with D flip-flops."""
 
     def __init__(self, width: int, initial: int = 0):
-        self.width = width
+        self.width = _require_width(width)
+        initial = _require_unsigned(initial, self.width, "initial")
         self.cells: List[DFlipFlop] = [
-            DFlipFlop((initial >> (width - 1 - i)) & 1) for i in range(width)
+            DFlipFlop((initial >> (self.width - 1 - index)) & 1)
+            for index in range(self.width)
         ]
 
     def load(self, value: int) -> None:
-        """Present a value on the D inputs (latched on the next clock)."""
-        for i, cell in enumerate(self.cells):
-            cell.set_input((value >> (self.width - 1 - i)) & 1)
+        """Present a valid word at the D inputs for the next clock edge."""
+        value = _require_unsigned(value, self.width, "value")
+        for index, cell in enumerate(self.cells):
+            cell.set_input((value >> (self.width - 1 - index)) & 1)
 
     def clock(self) -> int:
+        """Latch all D inputs in parallel and return the stored word."""
         for cell in self.cells:
             cell.clock()
         return self.value()
 
     def value(self) -> int:
-        v = 0
+        """Return the currently stored unsigned integer."""
+        result = 0
         for cell in self.cells:
-            v = (v << 1) | cell.q
-        return v
+            result = (result << 1) | cell.q
+        return result
+
+    def reset(self) -> None:
+        """Clear every storage cell."""
+        for cell in self.cells:
+            cell.reset()
 
 
 class BinaryCounter:
-    """
-    Synchronous up counter built from T flip-flops.
-    Each stage toggles when all lower stages are 1 (classic ripple/enable
-    chain). Wraps around at 2**width.
-    """
+    """Synchronous N-bit up counter built from T flip-flop models."""
 
     def __init__(self, width: int, initial: int = 0):
-        self.width = width
+        self.width = _require_width(width)
+        initial = _require_unsigned(initial, self.width, "initial")
         self.stages: List[TFlipFlop] = [
-            TFlipFlop((initial >> i) & 1) for i in range(width)  # stage 0 = LSB
+            TFlipFlop((initial >> index) & 1)
+            for index in range(self.width)
         ]
 
     def reset(self) -> None:
+        """Clear the counter to zero."""
         for stage in self.stages:
-            stage.dff.q = 0
-            stage.dff.d = 0
+            stage.reset()
 
     def clock(self) -> int:
-        # Capture PRE-clock outputs; in real hardware every flip-flop sees the
-        # current state when the edge arrives, so enables must not use values
-        # that have already been updated this edge.
-        pre = [stage.q for stage in self.stages]   # LSB -> MSB
+        """Advance one synchronous count and return the new value."""
+        previous = [stage.q for stage in self.stages]
         enable = 1
-        for i, stage in enumerate(self.stages):    # LSB -> MSB
-            stage.set_input(enable)                # T_i = AND of lower Qs
-            enable &= pre[i]                        # fold in for the next stage
-        for stage in self.stages:                  # all toggle simultaneously
+        for index, stage in enumerate(self.stages):
+            stage.set_input(enable)
+            enable &= previous[index]
+        for stage in self.stages:
             stage.clock()
         return self.value()
 
     def value(self) -> int:
-        v = 0
-        for stage in reversed(self.stages):        # MSB first for the integer
-            v = (v << 1) | stage.q
-        return v
+        """Return the current unsigned counter value."""
+        result = 0
+        for stage in reversed(self.stages):
+            result = (result << 1) | stage.q
+        return result
 
 
 class Clock:
-    """A trivial clock source: yields alternating 0/1 levels or edge counts."""
+    """Simple simulation clock that returns an increasing edge count."""
 
     def __init__(self):
         self.ticks = 0
 
     def tick(self) -> int:
+        """Advance one edge and return the total number of elapsed edges."""
         self.ticks += 1
         return self.ticks
 
+    def reset(self) -> None:
+        """Reset the edge count to zero."""
+        self.ticks = 0
+
 
 if __name__ == "__main__":
-    ctr = BinaryCounter(3)
-    seq = [ctr.clock() for _ in range(10)]
-    print("3-bit counter sequence:", seq)   # 1,2,...,7,0,1,2
-
-    reg = Register(8)
-    reg.load(0b10110001)
-    print("register after load+clock:", bin(reg.clock()))
+    counter = BinaryCounter(3)
+    print("3-bit counter sequence:", [counter.clock() for _ in range(10)])
