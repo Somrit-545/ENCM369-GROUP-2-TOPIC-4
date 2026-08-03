@@ -9,9 +9,7 @@ them in the application demos or performance analysis.
 Run:  python -m tests.verify
 Author: Members A & B (verification)
 """
-
-
-     import itertools
+import itertools
 import sys
 from typing import Callable, List, Type
 
@@ -31,6 +29,7 @@ from applications.smart_home import (
     SECURITY_OUTPUTS,
     SECURITY_STATES,
     SECURITY_TRANSITIONS,
+    apply_smoke_sensor,
     build_security_fsm,
     decode_command,
     read_status,
@@ -462,14 +461,32 @@ def _verify_smart_home(results: Results) -> None:
         resulting_state = machine.step(event)
         transition_ok &= resulting_state == SECURITY_TRANSITIONS[(state, event)]
         transition_ok &= machine.output() == SECURITY_OUTPUTS[resulting_state]
-    scenario = run_security(["arm", "motion", "clear", "disarm"])
+    scenario = run_security(["arm", "motion", "clear", "disarm", "smoke"])
     transition_ok &= [row[1] for row in scenario] == [
         "ARMED",
         "ALARM",
         "ARMED",
         "DISARMED",
+        "ALARM",
     ]
     results.check("security FSM completeness and scenario", transition_ok)
+
+    safe_machine = build_security_fsm()
+    safe_result = apply_smoke_sensor(safe_machine, (0, 0, 0, 0))
+    fire_machine = build_security_fsm()
+    fire_result = apply_smoke_sensor(fire_machine, (0, 0, 0, 1))
+    armed_machine = build_security_fsm()
+    armed_machine.step("arm")
+    armed_fire_result = apply_smoke_sensor(armed_machine, (0, 0, 0, 1))
+    smoke_integration_ok = (
+        safe_result == (0, "DISARMED", "siren=OFF")
+        and fire_result == (1, "ALARM", "siren=ON")
+        and armed_fire_result == (1, "ALARM", "siren=ON")
+    )
+    results.check(
+        "smoke sensor automatically triggers the security alarm",
+        smoke_integration_ok,
+    )
 
     invalid_cases = [
         (ValueError, decode_command, (-1,), {}),
@@ -477,6 +494,8 @@ def _verify_smart_home(results: Results) -> None:
         (ValueError, read_status, ((0, 1, 0), 0), {}),
         (ValueError, read_status, ((0, 1, 2, 0), 0), {}),
         (ValueError, read_status, ((0, 1, 0, 1), 4), {}),
+        (ValueError, apply_smoke_sensor, (build_security_fsm(), (0, 0, 0)), {}),
+        (TypeError, apply_smoke_sensor, ("not an FSM", (0, 0, 0, 1)), {}),
         (ValueError, thermostat, (0, 0, 0), {}),
         (ValueError, thermostat, (64, 21), {}),
         (ValueError, run_security, (("arm", "motoin"),), {}),
