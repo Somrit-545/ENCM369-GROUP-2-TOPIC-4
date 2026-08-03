@@ -17,12 +17,11 @@ Course concepts demonstrated: decoders, multiplexers, comparators, FSM control.
 
 Authors: Member C (application mapping) & Member D (integration)
 """
-
-
 from pathlib import Path
 import sys
 from typing import Iterable, List, Sequence, Tuple
 
+# Allow this file to run directly or as part of the applications package.
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -30,6 +29,7 @@ from logic.combinational import decoder_2to4, magnitude_comparator, mux4, to_bit
 from logic.fsm import FSM
 
 
+# Define the four appliance targets controlled by the 2-to-4 decoder.
 APPLIANCES: Tuple[str, ...] = (
     "LIGHTS",
     "THERMOSTAT",
@@ -37,6 +37,7 @@ APPLIANCES: Tuple[str, ...] = (
     "ALARM",
 )
 
+# Assign one name to each input channel of the 4-to-1 sensor multiplexer.
 SENSOR_NAMES: Tuple[str, ...] = (
     "door",
     "window",
@@ -44,12 +45,14 @@ SENSOR_NAMES: Tuple[str, ...] = (
     "smoke",
 )
 
+# Define the three operating states of the Moore security controller.
 SECURITY_STATES: Tuple[str, ...] = (
     "DISARMED",
     "ARMED",
     "ALARM",
 )
 
+# Define every event accepted by the security FSM.
 SECURITY_EVENTS: Tuple[str, ...] = (
     "arm",
     "disarm",
@@ -58,6 +61,7 @@ SECURITY_EVENTS: Tuple[str, ...] = (
     "clear",
 )
 
+# Map every current-state and event pair to the next security state.
 SECURITY_TRANSITIONS = {
     ("DISARMED", "arm"): "ARMED",
     ("DISARMED", "disarm"): "DISARMED",
@@ -76,12 +80,14 @@ SECURITY_TRANSITIONS = {
     ("ALARM", "clear"): "ARMED",
 }
 
+# Assign the siren output to each Moore state.
 SECURITY_OUTPUTS = {
     "DISARMED": "siren=OFF",
     "ARMED": "siren=OFF",
     "ALARM": "siren=ON",
 }
 
+# Convert comparator results into thermostat control actions.
 THERMOSTAT_ACTIONS = {
     "A>B": "COOL",
     "A<B": "HEAT",
@@ -93,12 +99,14 @@ SmokeAlarmResult = Tuple[int, str, str]
 CommandDecodeResult = Tuple[str, List[int]]
 
 
+# Validate that a value is an integer and not a Boolean value.
 def _require_integer(value: int, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise TypeError(f"{name} must be an integer")
     return value
 
 
+# Validate that an integer is inside the required inclusive range.
 def _require_range(value: int, name: str, minimum: int, maximum: int) -> int:
     value = _require_integer(value, name)
     if not minimum <= value <= maximum:
@@ -106,10 +114,12 @@ def _require_range(value: int, name: str, minimum: int, maximum: int) -> int:
     return value
 
 
+# Restrict a digital signal to the valid binary values 0 and 1.
 def _require_bit(value: int, name: str) -> int:
     return _require_range(value, name, 0, 1)
 
 
+# Confirm that the security FSM tables are complete and internally valid.
 def _validate_security_configuration() -> None:
     expected_pairs = {
         (state, event)
@@ -131,6 +141,7 @@ def _validate_security_configuration() -> None:
         raise RuntimeError("security transition table contains an unknown state")
 
 
+# Build the complete Moore security FSM from the transition and output tables.
 def build_security_fsm() -> FSM:
     """Create the complete three-state Moore security FSM."""
     _validate_security_configuration()
@@ -150,6 +161,7 @@ def run_security(events: Iterable[str]) -> List[SecurityTraceEntry]:
     except TypeError as error:
         raise TypeError("events must be iterable") from error
 
+    # Start from DISARMED and record the state and output after each event.
     fsm = build_security_fsm()
     trace: List[SecurityTraceEntry] = []
     for event in iterator:
@@ -160,6 +172,7 @@ def run_security(events: Iterable[str]) -> List[SecurityTraceEntry]:
             raise ValueError(
                 f"unknown security event {event!r}; expected one of: {allowed}"
             )
+        # Apply one event, then read the new Moore state and siren output.
         state = fsm.step(event)
         output = fsm.output()
         if state not in SECURITY_STATES or not isinstance(output, str):
@@ -170,6 +183,7 @@ def run_security(events: Iterable[str]) -> List[SecurityTraceEntry]:
 
 def decode_command(cmd_code: int) -> CommandDecodeResult:
     """Decode command 0-3 into one appliance and a 4-bit one-hot output."""
+    # Convert the command to two bits and activate one appliance output.
     cmd_code = _require_range(cmd_code, "cmd_code", 0, len(APPLIANCES) - 1)
     a1, a0 = to_bits(cmd_code, 2)
     one_hot = decoder_2to4(a1, a0)
@@ -186,6 +200,7 @@ def read_status(sensors: Sequence[int], channel_sel: int) -> int:
     if len(sensors) != len(SENSOR_NAMES):
         raise ValueError("sensors must contain exactly four readings")
 
+    # Validate all four sensor inputs before sending them to the multiplexer.
     checked = tuple(
         _require_bit(value, f"sensors[{index}]")
         for index, value in enumerate(sensors)
@@ -196,6 +211,7 @@ def read_status(sensors: Sequence[int], channel_sel: int) -> int:
         0,
         len(SENSOR_NAMES) - 1,
     )
+    # Convert the channel number to select bits and route one sensor value.
     s1, s0 = to_bits(channel_sel, 2)
     return mux4(*checked, s1, s0)
 
@@ -214,8 +230,10 @@ def apply_smoke_sensor(
     if not isinstance(security, FSM):
         raise TypeError("security must be an FSM instance")
 
+    # Read channel 3, which is assigned to the smoke detector.
     smoke_channel = SENSOR_NAMES.index("smoke")
     smoke_detected = read_status(sensors, smoke_channel)
+    # Trigger the smoke event so the FSM enters or remains in ALARM.
     if smoke_detected == 1:
         security.step("smoke")
 
@@ -232,9 +250,11 @@ def thermostat(current_temp: int, setpoint: int, width: int = 6) -> str:
     if width < 1:
         raise ValueError("width must be at least 1")
 
+    # Calculate the largest unsigned temperature supported by this bit width.
     maximum = (1 << width) - 1
     current_temp = _require_range(current_temp, "current_temp", 0, maximum)
     setpoint = _require_range(setpoint, "setpoint", 0, maximum)
+    # Compare the current temperature with the setpoint using fixed-width bits.
     comparison = magnitude_comparator(
         to_bits(current_temp, width),
         to_bits(setpoint, width),
@@ -246,15 +266,18 @@ def thermostat(current_temp: int, setpoint: int, width: int = 6) -> str:
     return THERMOSTAT_ACTIONS[comparison]
 
 
+# Combine all smart-home subsystems into one report-ready demonstration.
 def demo() -> str:
     """Run the smart-home demonstration and return a report-ready log."""
     log: List[str] = ["=== Smart-Home Controller Demo ==="]
 
+    # Demonstrate all four command-decoder outputs.
     log.append("\n[Command decoder -- 2-to-4]")
     for code in range(len(APPLIANCES)):
         selected, one_hot = decode_command(code)
         log.append(f"  cmd {code:02b} -> {selected:<10} one-hot={one_hot}")
 
+    # Demonstrate normal arm, motion, alarm, clear, and disarm transitions.
     log.append("\n[Security controller -- Moore FSM]")
     security = build_security_fsm()
     log.append(f"  start    -> {security.state:<9} [{security.output()}]")
@@ -262,12 +285,14 @@ def demo() -> str:
     for event, state, output in run_security(events):
         log.append(f"  {event:<8} -> {state:<9} [{output}]")
 
+    # Demonstrate selection of each door, window, motion, and smoke channel.
     log.append("\n[Sensor routing -- 4-to-1 multiplexer]")
     sensors = (1, 0, 1, 0)
     for channel, name in enumerate(SENSOR_NAMES):
         value = read_status(sensors, channel)
         log.append(f"  channel {channel} ({name:<7}) -> {value}")
 
+    # Demonstrate automatic fire-alarm activation from the smoke channel.
     log.append("\n[Fire detection -- smoke sensor + security FSM]")
     safe_security = build_security_fsm()
     safe_result = apply_smoke_sensor(safe_security, (0, 0, 0, 0))
@@ -282,6 +307,7 @@ def demo() -> str:
         f"[{fire_result[2]}]"
     )
 
+    # Demonstrate HEAT, IDLE, and COOL decisions around one setpoint.
     log.append("\n[Thermostat -- 6-bit magnitude comparator]")
     setpoint = 21
     for temperature in (18, 21, 25):
@@ -291,6 +317,10 @@ def demo() -> str:
         )
 
     return "\n".join(log)
+
+
+if __name__ == "__main__":
+    print(demo())
 
 
 if __name__ == "__main__":
