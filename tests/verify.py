@@ -605,5 +605,3 @@ if __name__ == "__main__":
     print("\n".join(verification_results.log))
     print(verification_results.summary())
     sys.exit(1 if verification_results.failed else 0)
-
-    
