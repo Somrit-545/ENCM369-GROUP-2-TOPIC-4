@@ -15,11 +15,18 @@ binary arithmetic (adder), sequential + combinational integration.
 
 Authors: Member C (application mapping) & Member D (integration)
 """
+"""Industrial-automation applications for the ENCM 369 Topic 4 project.
+
+The module combines a Moore traffic FSM with a binary phase counter and a
+3-to-8 conveyor decoder with a ripple-carry processed-item counter.  It is an
+educational software model, not a safety-certified industrial controller.
+"""
 
 from pathlib import Path
 import sys
 from typing import Iterable, List, Tuple
 
+# Allow this file to run both directly and as part of the applications package.
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -28,6 +35,7 @@ from logic.fsm import FSM
 from logic.sequential import BinaryCounter
 
 
+# Define the four traffic-light states in their operating sequence.
 TRAFFIC_STATES: Tuple[str, ...] = (
     "NS_GREEN",
     "NS_YELLOW",
@@ -35,6 +43,7 @@ TRAFFIC_STATES: Tuple[str, ...] = (
     "EW_YELLOW",
 )
 
+# Move the Moore FSM to the next traffic phase after one completed dwell period.
 TRAFFIC_TRANSITIONS = {
     ("NS_GREEN", "tick"): "NS_YELLOW",
     ("NS_YELLOW", "tick"): "EW_GREEN",
@@ -42,6 +51,7 @@ TRAFFIC_TRANSITIONS = {
     ("EW_YELLOW", "tick"): "NS_GREEN",
 }
 
+# Assign north-south and east-west light outputs to each Moore state.
 TRAFFIC_OUTPUTS = {
     "NS_GREEN": "NS=GREEN  EW=RED",
     "NS_YELLOW": "NS=YELLOW EW=RED",
@@ -49,6 +59,7 @@ TRAFFIC_OUTPUTS = {
     "EW_YELLOW": "NS=RED    EW=YELLOW",
 }
 
+# Set how many clock ticks each traffic phase remains active.
 PHASE_TICKS = {
     "NS_GREEN": 4,
     "NS_YELLOW": 2,
@@ -56,6 +67,7 @@ PHASE_TICKS = {
     "EW_YELLOW": 2,
 }
 
+# Map each 3-bit product tag to one of eight conveyor destinations.
 BINS: Tuple[str, ...] = (
     "REJECT",
     "SMALL",
@@ -92,6 +104,7 @@ def _require_positive_integer(value: int, name: str) -> int:
     return value
 
 
+# Verify that every state has one transition, one output, and one dwell time.
 def _validate_traffic_configuration() -> int:
     expected_transitions = {(state, "tick") for state in TRAFFIC_STATES}
     if set(TRAFFIC_TRANSITIONS) != expected_transitions:
@@ -119,6 +132,7 @@ def _validate_traffic_configuration() -> int:
     return max(1, maximum_ticks.bit_length())
 
 
+# Build the Moore traffic controller from the transition and output tables.
 def build_traffic_fsm() -> FSM:
     """Create the four-state Moore traffic FSM."""
     _validate_traffic_configuration()
@@ -132,6 +146,7 @@ def build_traffic_fsm() -> FSM:
 def run_traffic(cycles: int = 2) -> List[TrafficLogEntry]:
     """Run complete traffic cycles and return tick/state/output/timer rows."""
     cycles = _require_positive_integer(cycles, "cycles")
+    # Create the traffic FSM and a binary counter for the current phase time.
     timer_width = _validate_traffic_configuration()
     fsm = build_traffic_fsm()
     timer = BinaryCounter(timer_width)
@@ -153,8 +168,10 @@ def run_traffic(cycles: int = 2) -> List[TrafficLogEntry]:
         if not isinstance(output, str):
             raise RuntimeError(f"traffic state {state!r} has no valid output")
 
+        # Record the current tick, state, light outputs, and phase-counter value.
         log.append((global_tick, state, output, timer_count))
 
+        # Advance the FSM and reset the timer when the dwell time is complete.
         if timer_count == target_ticks:
             fsm.step("tick")
             timer.reset()
@@ -167,6 +184,7 @@ def run_traffic(cycles: int = 2) -> List[TrafficLogEntry]:
 
 def sort_item(tag: int) -> SortResult:
     """Decode one 3-bit product tag into one bin and an 8-bit one-hot list."""
+    # Convert the integer tag to three bits and activate one decoder output.
     tag = _require_range(tag, "tag", 0, len(BINS) - 1)
     a2, a1, a0 = to_bits(tag, 3)
     one_hot = decoder_3to8(a2, a1, a0)
@@ -188,14 +206,17 @@ def run_sorter(
     except TypeError as error:
         raise TypeError("tags must be iterable") from error
 
+    # Initialize a fixed-width binary processed-item counter and a value of one.
     counter_width = _require_positive_integer(counter_width, "counter_width")
     count_bits = to_bits(0, counter_width)
     increment = to_bits(1, counter_width)
     log: List[SorterLogEntry] = []
 
     for item_number, tag in enumerate(iterator, start=1):
+        # Decode the product destination and increment the binary count by one.
         bin_name, _ = sort_item(tag)
         next_count_bits, carry_out = ripple_carry_adder(count_bits, increment)
+        # Reject the next item if the fixed-width counter cannot represent it.
         if carry_out:
             maximum = (1 << counter_width) - 1
             raise OverflowError(
@@ -211,6 +232,7 @@ def run_sorter(
     return log
 
 
+# Combine the traffic and conveyor simulations into one report-ready output.
 def demo() -> str:
     """Run the industrial demonstrations and return a report-ready log."""
     log: List[str] = ["=== Industrial Automation Demo ==="]
